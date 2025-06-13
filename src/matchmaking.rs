@@ -4,6 +4,8 @@ use super::*;
 #[cfg(test)]
 use serial_test::serial;
 
+use serde_diff::SerdeDiff;
+
 /// Access to the steam matchmaking interface
 pub struct Matchmaking {
     pub(crate) mm: *mut sys::ISteamMatchmaking,
@@ -23,7 +25,7 @@ pub enum LobbyType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize, SerdeDiff))]
 pub struct LobbyId(pub(crate) u64);
 
 impl LobbyId {
