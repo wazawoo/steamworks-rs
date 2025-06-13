@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+use serde_diff::SerdeDiff;
 
 pub use crate::app::*;
 pub use crate::callback::*;
@@ -535,7 +536,7 @@ impl Drop for ClientManager {
 
 /// A user's steam id
 #[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize, SerdeDiff))]
 pub struct SteamId(pub(crate) u64);
 
 impl SteamId {
