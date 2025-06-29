@@ -1249,6 +1249,35 @@ unsafe impl Callback for LobbyEnter {
     }
 }
 
+/// A game server has been set via SetLobbyGameServer for all of the members of the lobby to join. It's up to the individual clients to take action on this; the typical game behavior is to leave the lobby and connect to the specified game server; but the lobby may stay open throughout the session if desired.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct LobbyGameCreated {
+    /// The lobby that set the game server.
+    pub lobby: LobbyId,
+    /// The Steam ID of the game server, if it's set.
+    pub game_server: SteamId,
+    /// IP & Port of the game server (if any)
+    pub game_addr: SocketAddrV4
+}
+
+unsafe impl Callback for LobbyGameCreated {
+    const ID: i32 = 509;
+
+    unsafe fn from_raw(raw: *mut c_void) -> Self {
+        let val = &mut *(raw as *mut sys::LobbyGameCreated_t);
+
+        LobbyGameCreated {
+            lobby: LobbyId(val.m_ulSteamIDLobby), 
+            game_server: SteamId(val.m_ulSteamIDGameServer), 
+            game_addr: SocketAddrV4::new(
+                Ipv4Addr::from_bits(val.m_unIP), 
+                val.m_usPort
+            )
+        }
+    }
+}
+
 #[test]
 #[serial]
 fn test_lobby() {

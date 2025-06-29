@@ -22,6 +22,7 @@ pub enum CallbackResult {
     LobbyCreated(LobbyCreated),
     LobbyDataUpdate(LobbyDataUpdate),
     LobbyEnter(LobbyEnter),
+    LobbyGameCreated(LobbyGameCreated),
     MicroTxnAuthorizationResponse(MicroTxnAuthorizationResponse),
     NetConnectionStatusChanged(NetConnectionStatusChanged),
     NetworkingMessagesSessionFailed(NetworkingMessagesSessionFailed),
