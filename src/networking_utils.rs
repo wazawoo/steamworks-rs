@@ -179,6 +179,7 @@ impl From<sys::SteamRelayNetworkStatus_t> for RelayNetworkStatus {
 
 #[derive(Debug)]
 /// The relay network status callback.
+#[derive(Debug)]
 pub struct RelayNetworkStatusCallback {
     status: RelayNetworkStatus,
 }
