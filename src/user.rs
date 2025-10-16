@@ -51,7 +51,7 @@ impl User {
             let mut ticket_len = 0;
             let auth_ticket = sys::SteamAPI_ISteamUser_GetAuthSessionTicket(
                 self.user,
-                ticket.as_mut_ptr() as *mut _,
+                ticket.as_mut_ptr().cast(),
                 1024,
                 &mut ticket_len,
                 network_identity.as_ptr(),
@@ -88,7 +88,7 @@ impl User {
         unsafe {
             let res = sys::SteamAPI_ISteamUser_BeginAuthSession(
                 self.user,
-                ticket.as_ptr() as *const _,
+                ticket.as_ptr().cast(),
                 ticket.len() as _,
                 user.0,
             );
@@ -142,12 +142,34 @@ impl User {
     pub fn authentication_session_ticket_for_webapi(&self, identity: &str) -> AuthTicket {
         unsafe {
             let c_str = CString::new(identity).unwrap();
-            let c_world: *const ::std::os::raw::c_char =
-                c_str.as_ptr() as *const ::std::os::raw::c_char;
-
-            let auth_ticket = sys::SteamAPI_ISteamUser_GetAuthTicketForWebApi(self.user, c_world);
+            let auth_ticket =
+                sys::SteamAPI_ISteamUser_GetAuthTicketForWebApi(self.user, c_str.as_ptr());
 
             AuthTicket(auth_ticket)
+        }
+    }
+
+    /// Checks if the user owns a piece of DLC specified by app id.
+    ///
+    /// This can only be called after authenticating
+    /// with the user using `begin_authentication_session`.
+    pub fn user_has_license_for_app(&self, user: SteamId, app_id: AppId) -> UserHasLicense {
+        unsafe {
+            let license_response =
+                sys::SteamAPI_ISteamUser_UserHasLicenseForApp(self.user, user.0, app_id.0);
+
+            match license_response {
+                sys::EUserHasLicenseForAppResult::k_EUserHasLicenseResultHasLicense => {
+                    UserHasLicense::HasLicense
+                }
+                sys::EUserHasLicenseForAppResult::k_EUserHasLicenseResultDoesNotHaveLicense => {
+                    UserHasLicense::DoesNotHaveLicense
+                }
+                sys::EUserHasLicenseForAppResult::k_EUserHasLicenseResultNoAuth => {
+                    UserHasLicense::NoAuth
+                }
+                _ => unreachable!(),
+            }
         }
     }
 }
@@ -182,7 +204,7 @@ fn test_auth_dll() {
         println!("Got dll auth response: {:?}", v)
     });
     let _cb = client.register_callback(|v: ValidateAuthTicketResponse| {
-        println!("Got validate auth reponse: {:?}", v)
+        println!("Got validate auth response: {:?}", v)
     });
 
     let id = user.steam_id();
@@ -192,6 +214,10 @@ fn test_auth_dll() {
     println!("{:?}", ticket);
 
     println!("{:?}", user.begin_authentication_session(id, &ticket));
+
+    // this might still return NoAuth if the validation has not completed
+    let has_space_war = user.user_has_license_for_app(id, AppId(480));
+    println!("User has license response: {has_space_war:?}");
 
     for _ in 0..20 {
         client.run_callbacks();
@@ -226,21 +252,12 @@ pub struct AuthSessionTicketResponse {
     pub result: SResult<()>,
 }
 
-unsafe impl Callback for AuthSessionTicketResponse {
-    const ID: i32 = 163;
-
-    unsafe fn from_raw(raw: *mut c_void) -> Self {
-        let val = &mut *(raw as *mut sys::GetAuthSessionTicketResponse_t);
-        AuthSessionTicketResponse {
-            ticket: AuthTicket(val.m_hAuthTicket),
-            result: if val.m_eResult == sys::EResult::k_EResultOK {
-                Ok(())
-            } else {
-                Err(val.m_eResult.into())
-            },
-        }
+impl_callback!(cb: GetAuthSessionTicketResponse_t => AuthSessionTicketResponse {
+    Self {
+        ticket: AuthTicket(cb.m_hAuthTicket),
+        result: crate::to_steam_result(cb.m_eResult),
     }
-}
+});
 
 #[test]
 #[serial]
@@ -275,25 +292,14 @@ pub struct TicketForWebApiResponse {
     pub ticket: Vec<u8>,
 }
 
-unsafe impl Callback for TicketForWebApiResponse {
-    const ID: i32 = 168;
-
-    unsafe fn from_raw(raw: *mut c_void) -> Self {
-        println!("From raw: {:?}", raw);
-
-        let val = &mut *(raw as *mut sys::GetTicketForWebApiResponse_t);
-        TicketForWebApiResponse {
-            ticket_handle: AuthTicket(val.m_hAuthTicket),
-            result: if val.m_eResult == sys::EResult::k_EResultOK {
-                Ok(())
-            } else {
-                Err(val.m_eResult.into())
-            },
-            ticket_len: val.m_cubTicket,
-            ticket: val.m_rgubTicket.to_vec(),
-        }
+impl_callback!(cb: GetTicketForWebApiResponse_t => TicketForWebApiResponse {
+    Self {
+        ticket_handle: AuthTicket(cb.m_hAuthTicket),
+        result: crate::to_steam_result(cb.m_eResult),
+        ticket_len: cb.m_cubTicket,
+        ticket: cb.m_rgubTicket.to_vec(),
     }
-}
+});
 
 /// Called when an authentication ticket has been
 /// validated.
@@ -308,48 +314,43 @@ pub struct ValidateAuthTicketResponse {
     pub owner_steam_id: SteamId,
 }
 
-unsafe impl Callback for ValidateAuthTicketResponse {
-    const ID: i32 = 143;
-
-    unsafe fn from_raw(raw: *mut c_void) -> Self {
-        let val = &mut *(raw as *mut sys::ValidateAuthTicketResponse_t);
-        ValidateAuthTicketResponse {
-            steam_id: SteamId(val.m_SteamID.m_steamid.m_unAll64Bits),
-            owner_steam_id: SteamId(val.m_OwnerSteamID.m_steamid.m_unAll64Bits),
-            response: match val.m_eAuthSessionResponse {
-                sys::EAuthSessionResponse::k_EAuthSessionResponseOK => Ok(()),
-                sys::EAuthSessionResponse::k_EAuthSessionResponseUserNotConnectedToSteam => {
-                    Err(AuthSessionValidateError::UserNotConnectedToSteam)
-                }
-                sys::EAuthSessionResponse::k_EAuthSessionResponseNoLicenseOrExpired => {
-                    Err(AuthSessionValidateError::NoLicenseOrExpired)
-                }
-                sys::EAuthSessionResponse::k_EAuthSessionResponseVACBanned => {
-                    Err(AuthSessionValidateError::VACBanned)
-                }
-                sys::EAuthSessionResponse::k_EAuthSessionResponseLoggedInElseWhere => {
-                    Err(AuthSessionValidateError::LoggedInElseWhere)
-                }
-                sys::EAuthSessionResponse::k_EAuthSessionResponseVACCheckTimedOut => {
-                    Err(AuthSessionValidateError::VACCheckTimedOut)
-                }
-                sys::EAuthSessionResponse::k_EAuthSessionResponseAuthTicketCanceled => {
-                    Err(AuthSessionValidateError::AuthTicketCancelled)
-                }
-                sys::EAuthSessionResponse::k_EAuthSessionResponseAuthTicketInvalidAlreadyUsed => {
-                    Err(AuthSessionValidateError::AuthTicketInvalidAlreadyUsed)
-                }
-                sys::EAuthSessionResponse::k_EAuthSessionResponseAuthTicketInvalid => {
-                    Err(AuthSessionValidateError::AuthTicketInvalid)
-                }
-                sys::EAuthSessionResponse::k_EAuthSessionResponsePublisherIssuedBan => {
-                    Err(AuthSessionValidateError::PublisherIssuedBan)
-                }
-                _ => unreachable!(),
-            },
-        }
+impl_callback!(cb: ValidateAuthTicketResponse_t => ValidateAuthTicketResponse {
+    Self {
+        steam_id: SteamId(cb.m_SteamID.m_steamid.m_unAll64Bits),
+        owner_steam_id: SteamId(cb.m_OwnerSteamID.m_steamid.m_unAll64Bits),
+        response: match cb.m_eAuthSessionResponse {
+            sys::EAuthSessionResponse::k_EAuthSessionResponseOK => Ok(()),
+            sys::EAuthSessionResponse::k_EAuthSessionResponseUserNotConnectedToSteam => {
+                Err(AuthSessionValidateError::UserNotConnectedToSteam)
+            }
+            sys::EAuthSessionResponse::k_EAuthSessionResponseNoLicenseOrExpired => {
+                Err(AuthSessionValidateError::NoLicenseOrExpired)
+            }
+            sys::EAuthSessionResponse::k_EAuthSessionResponseVACBanned => {
+                Err(AuthSessionValidateError::VACBanned)
+            }
+            sys::EAuthSessionResponse::k_EAuthSessionResponseLoggedInElseWhere => {
+                Err(AuthSessionValidateError::LoggedInElseWhere)
+            }
+            sys::EAuthSessionResponse::k_EAuthSessionResponseVACCheckTimedOut => {
+                Err(AuthSessionValidateError::VACCheckTimedOut)
+            }
+            sys::EAuthSessionResponse::k_EAuthSessionResponseAuthTicketCanceled => {
+                Err(AuthSessionValidateError::AuthTicketCancelled)
+            }
+            sys::EAuthSessionResponse::k_EAuthSessionResponseAuthTicketInvalidAlreadyUsed => {
+                Err(AuthSessionValidateError::AuthTicketInvalidAlreadyUsed)
+            }
+            sys::EAuthSessionResponse::k_EAuthSessionResponseAuthTicketInvalid => {
+                Err(AuthSessionValidateError::AuthTicketInvalid)
+            }
+            sys::EAuthSessionResponse::k_EAuthSessionResponsePublisherIssuedBan => {
+                Err(AuthSessionValidateError::PublisherIssuedBan)
+            }
+            _ => unreachable!(),
+        },
     }
-}
+});
 
 // Called when a microtransaction authorization response is received
 #[derive(Clone, Debug)]
@@ -360,31 +361,22 @@ pub struct MicroTxnAuthorizationResponse {
     pub authorized: bool,
 }
 
-unsafe impl Callback for MicroTxnAuthorizationResponse {
-    const ID: i32 = 152;
-
-    unsafe fn from_raw(raw: *mut c_void) -> Self {
-        let val = &mut *(raw as *mut sys::MicroTxnAuthorizationResponse_t);
-        MicroTxnAuthorizationResponse {
-            app_id: val.m_unAppID.into(),
-            order_id: val.m_ulOrderID.into(),
-            authorized: val.m_bAuthorized == 1,
-        }
+impl_callback!(cb: MicroTxnAuthorizationResponse_t => MicroTxnAuthorizationResponse {
+    Self {
+        app_id: cb.m_unAppID.into(),
+        order_id: cb.m_ulOrderID.into(),
+        authorized: cb.m_bAuthorized == 1,
     }
-}
+});
 
 /// Called when a connection to the Steam servers is made.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct SteamServersConnected;
 
-unsafe impl Callback for SteamServersConnected {
-    const ID: i32 = 101;
-
-    unsafe fn from_raw(_: *mut c_void) -> Self {
-        SteamServersConnected
-    }
-}
+impl_callback!(_cb: SteamServersConnected_t => SteamServersConnected {
+    Self
+});
 
 /// Called when the connection to the Steam servers is lost.
 #[derive(Clone, Debug)]
@@ -394,16 +386,11 @@ pub struct SteamServersDisconnected {
     pub reason: SteamError,
 }
 
-unsafe impl Callback for SteamServersDisconnected {
-    const ID: i32 = 103;
-
-    unsafe fn from_raw(raw: *mut c_void) -> Self {
-        let val = &mut *(raw as *mut sys::SteamServersDisconnected_t);
-        SteamServersDisconnected {
-            reason: val.m_eResult.into(),
-        }
+impl_callback!(cb: SteamServersDisconnected_t => SteamServersDisconnected {
+    Self {
+        reason: cb.m_eResult.into(),
     }
-}
+});
 
 /// Called when the connection to the Steam servers fails.
 #[derive(Clone, Debug)]
@@ -415,17 +402,12 @@ pub struct SteamServerConnectFailure {
     pub still_retrying: bool,
 }
 
-unsafe impl Callback for SteamServerConnectFailure {
-    const ID: i32 = 102;
-
-    unsafe fn from_raw(raw: *mut c_void) -> Self {
-        let val = &mut *(raw as *mut sys::SteamServerConnectFailure_t);
-        SteamServerConnectFailure {
-            reason: val.m_eResult.into(),
-            still_retrying: val.m_bStillRetrying,
-        }
+impl_callback!(cb: SteamServerConnectFailure_t => SteamServerConnectFailure {
+    Self {
+        reason: cb.m_eResult.into(),
+        still_retrying: cb.m_bStillRetrying,
     }
-}
+});
 
 /// Errors from `ValidateAuthTicketResponse`
 #[derive(Clone, Debug, Error)]
@@ -460,4 +442,15 @@ pub enum AuthSessionValidateError {
     /// The user is banned from the game (not VAC)
     #[error("the user is banned")]
     PublisherIssuedBan,
+}
+
+/// Results from [`User::user_has_license_for_app`]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UserHasLicense {
+    /// The user has a license for the specified app.
+    HasLicense,
+    /// The user does not have a license for the specified app.
+    DoesNotHaveLicense,
+    /// The user has not been authenticated.
+    NoAuth,
 }

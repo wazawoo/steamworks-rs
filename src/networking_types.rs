@@ -1413,19 +1413,13 @@ pub struct NetConnectionStatusChanged {
     pub old_state: NetworkingConnectionState,
 }
 
-unsafe impl Callback for NetConnectionStatusChanged {
-    const ID: i32 = sys::SteamNetConnectionStatusChangedCallback_t_k_iCallback as _;
-
-    unsafe fn from_raw(raw: *mut c_void) -> Self {
-        let val = &mut *(raw as *mut sys::SteamNetConnectionStatusChangedCallback_t);
-
-        NetConnectionStatusChanged {
-            connection: val.m_hConn,
-            connection_info: val.m_info.into(),
-            old_state: val.m_eOldState.try_into().unwrap(),
-        }
+impl_callback!(cb: SteamNetConnectionStatusChangedCallback_t => NetConnectionStatusChanged {
+    Self {
+        connection: cb.m_hConn,
+        connection_info: cb.m_info.into(),
+        old_state: cb.m_eOldState.try_into().unwrap(),
     }
-}
+});
 
 impl NetConnectionStatusChanged {
     pub(crate) fn into_listen_socket_event(
@@ -2072,9 +2066,7 @@ impl SteamIpAddr {
     }
 
     pub fn get_ipv4(&self) -> Option<Ipv4Addr> {
-        let ip = unsafe {
-            sys::SteamAPI_SteamNetworkingIPAddr_GetIPv4(&self.inner as *const _ as *mut _)
-        };
+        let ip = unsafe { sys::SteamAPI_SteamNetworkingIPAddr_GetIPv4(self.as_ptr() as *mut _) };
         if ip == 0 {
             None
         } else {
@@ -2157,10 +2149,7 @@ impl Default for SteamIpAddr {
 impl PartialEq for SteamIpAddr {
     fn eq(&self, other: &Self) -> bool {
         unsafe {
-            sys::SteamAPI_SteamNetworkingIPAddr_IsEqualTo(
-                &self.inner as *const _ as *mut _,
-                &other.inner,
-            )
+            sys::SteamAPI_SteamNetworkingIPAddr_IsEqualTo(self.as_ptr() as *mut _, &other.inner)
         }
     }
 }

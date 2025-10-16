@@ -177,22 +177,18 @@ impl From<sys::SteamRelayNetworkStatus_t> for RelayNetworkStatus {
     }
 }
 
+#[derive(Debug)]
 /// The relay network status callback.
 #[derive(Debug)]
 pub struct RelayNetworkStatusCallback {
     status: RelayNetworkStatus,
 }
 
-unsafe impl Callback for RelayNetworkStatusCallback {
-    const ID: i32 = sys::SteamRelayNetworkStatus_t_k_iCallback as _;
-
-    unsafe fn from_raw(raw: *mut c_void) -> Self {
-        let status = *(raw as *mut sys::SteamRelayNetworkStatus_t);
-        Self {
-            status: status.into(),
-        }
+impl_callback!(cb: SteamRelayNetworkStatus_t => RelayNetworkStatusCallback {
+    Self {
+        status: cb.into(),
     }
-}
+});
 
 #[cfg(test)]
 mod tests {

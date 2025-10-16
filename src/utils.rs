@@ -17,27 +17,18 @@ pub struct GamepadTextInputDismissed {
     pub submitted_text_len: Option<u32>,
 }
 
-unsafe impl Callback for GamepadTextInputDismissed {
-    const ID: i32 = 714;
-
-    unsafe fn from_raw(raw: *mut c_void) -> Self {
-        let val = &mut *(raw as *mut sys::GamepadTextInputDismissed_t);
-        GamepadTextInputDismissed {
-            submitted_text_len: val.m_bSubmitted.then_some(val.m_unSubmittedText),
-        }
+impl_callback!(cb: GamepadTextInputDismissed_t => GamepadTextInputDismissed {
+    Self {
+        submitted_text_len: cb.m_bSubmitted.then_some(cb.m_unSubmittedText),
     }
-}
+});
 
 #[derive(Clone, Debug)]
 pub struct FloatingGamepadTextInputDismissed;
 
-unsafe impl Callback for FloatingGamepadTextInputDismissed {
-    const ID: i32 = 738;
-
-    unsafe fn from_raw(_: *mut c_void) -> Self {
-        FloatingGamepadTextInputDismissed
-    }
-}
+impl_callback!(_cb: FloatingGamepadTextInputDismissed_t => FloatingGamepadTextInputDismissed {
+    Self
+});
 
 pub enum NotificationPosition {
     TopLeft,
@@ -225,11 +216,19 @@ impl Utils {
 
             sys::SteamAPI_ISteamUtils_GetEnteredGamepadTextInput(
                 self.utils,
-                buf.as_mut_ptr() as *mut i8,
+                buf.as_mut_ptr().cast(),
                 len,
             )
             .then(|| String::from_utf8(buf).expect("Steamworks returned invalid UTF-8 string"))
         }
+    }
+
+    /// Checks if Steam & the Steam Overlay are running in Big Picture mode.
+    ///
+    /// Games must be launched through the Steam client to enable the Big Picture overlay.
+    /// During development, a game can be added as a non-steam game to the developer's library to test this feature.
+    pub fn is_steam_in_big_picture_mode(&self) -> bool {
+        unsafe { sys::SteamAPI_ISteamUtils_IsSteamInBigPictureMode(self.utils) }
     }
 
     /// Checks if Steam is running on a Steam Deck device.
@@ -326,7 +325,7 @@ impl SteamParamStringArray {
     pub(crate) fn as_raw(&mut self) -> sys::SteamParamStringArray_t {
         sys::SteamParamStringArray_t {
             m_nNumStrings: self.0.len() as i32,
-            m_ppStrings: self.0.as_mut_ptr() as *mut *const i8,
+            m_ppStrings: self.0.as_mut_ptr().cast(),
         }
     }
 }

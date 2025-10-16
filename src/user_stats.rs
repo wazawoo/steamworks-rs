@@ -12,8 +12,6 @@ pub struct UserStats {
     pub(crate) inner: Arc<Inner>,
 }
 
-const CALLBACK_BASE_ID: i32 = 1100;
-
 impl UserStats {
     pub fn find_leaderboard<F>(&self, name: &str, cb: F)
     where
@@ -21,14 +19,11 @@ impl UserStats {
     {
         unsafe {
             let name = CString::new(name).unwrap();
-            let api_call = sys::SteamAPI_ISteamUserStats_FindLeaderboard(
-                self.user_stats,
-                name.as_ptr() as *const _,
-            );
+            let api_call =
+                sys::SteamAPI_ISteamUserStats_FindLeaderboard(self.user_stats, name.as_ptr());
             register_call_result::<sys::LeaderboardFindResult_t, _>(
                 &self.inner,
                 api_call,
-                CALLBACK_BASE_ID + 4,
                 move |v, io_error| {
                     cb(if io_error {
                         Err(SteamError::IOFailure)
@@ -79,14 +74,13 @@ impl UserStats {
 
             let api_call = sys::SteamAPI_ISteamUserStats_FindOrCreateLeaderboard(
                 self.user_stats,
-                name.as_ptr() as *const _,
+                name.as_ptr(),
                 sort_method,
                 display_type,
             );
             register_call_result::<sys::LeaderboardFindResult_t, _>(
                 &self.inner,
                 api_call,
-                CALLBACK_BASE_ID + 4,
                 move |v, io_error| {
                     cb(if io_error {
                         Err(SteamError::IOFailure)
@@ -132,7 +126,6 @@ impl UserStats {
             register_call_result::<sys::LeaderboardScoreUploaded_t, _>(
                 &self.inner,
                 api_call,
-                CALLBACK_BASE_ID + 6,
                 move |v, io_error| {
                     cb(if io_error {
                         Err(SteamError::IOFailure)
@@ -187,7 +180,6 @@ impl UserStats {
             register_call_result::<sys::LeaderboardScoresDownloaded_t, _>(
                 &self.inner,
                 api_call,
-                CALLBACK_BASE_ID + 5,
                 move |v, io_error| {
                     cb(if io_error {
                         Err(SteamError::IOFailure)
@@ -311,9 +303,6 @@ impl UserStats {
             register_call_result::<sys::GlobalAchievementPercentagesReady_t, _>(
                 &self.inner,
                 api_call,
-                // `CALLBACK_BASE_ID + <number>`: <number> is found in Steamworks `isteamuserstats.h` header file
-                // (Under `struct GlobalAchievementPercentagesReady_t {...};` in this case)
-                CALLBACK_BASE_ID + 10,
                 move |v, io_error| {
                     cb(if io_error {
                         Err(SteamError::IOFailure)
@@ -365,11 +354,7 @@ impl UserStats {
 
         let mut value: i32 = 0;
         let success = unsafe {
-            sys::SteamAPI_ISteamUserStats_GetStatInt32(
-                self.user_stats,
-                name.as_ptr() as *const _,
-                &mut value,
-            )
+            sys::SteamAPI_ISteamUserStats_GetStatInt32(self.user_stats, name.as_ptr(), &mut value)
         };
         if success {
             Ok(value)
@@ -391,11 +376,7 @@ impl UserStats {
         let name = CString::new(name).unwrap();
 
         let success = unsafe {
-            sys::SteamAPI_ISteamUserStats_SetStatInt32(
-                self.user_stats,
-                name.as_ptr() as *const _,
-                stat,
-            )
+            sys::SteamAPI_ISteamUserStats_SetStatInt32(self.user_stats, name.as_ptr(), stat)
         };
         if success {
             Ok(())
@@ -415,11 +396,7 @@ impl UserStats {
 
         let mut value: f32 = 0.0;
         let success = unsafe {
-            sys::SteamAPI_ISteamUserStats_GetStatFloat(
-                self.user_stats,
-                name.as_ptr() as *const _,
-                &mut value,
-            )
+            sys::SteamAPI_ISteamUserStats_GetStatFloat(self.user_stats, name.as_ptr(), &mut value)
         };
         if success {
             Ok(value)
@@ -441,11 +418,7 @@ impl UserStats {
         let name = CString::new(name).unwrap();
 
         let success = unsafe {
-            sys::SteamAPI_ISteamUserStats_SetStatFloat(
-                self.user_stats,
-                name.as_ptr() as *const _,
-                stat,
-            )
+            sys::SteamAPI_ISteamUserStats_SetStatFloat(self.user_stats, name.as_ptr(), stat)
         };
         if success {
             Ok(())

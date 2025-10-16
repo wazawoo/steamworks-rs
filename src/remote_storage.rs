@@ -1,6 +1,6 @@
-use super::*;
 #[cfg(test)]
 use serial_test::serial;
+use {super::*, ::core::mem::MaybeUninit};
 
 /// Access to the steam remote storage interface
 pub struct RemoteStorage {
@@ -112,6 +112,29 @@ impl RemoteStorage {
     }
 }
 
+bitflags! {
+    /// Platform flags used with [`SteamFile::set_sync_platforms`] to restrict
+    /// syncing to specific operating systems.
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    #[repr(C)]
+    #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+    pub struct RemoteStoragePlatforms: u32 {
+        const WINDOWS = sys::ERemoteStoragePlatform::k_ERemoteStoragePlatformWindows.0 as _;
+        const MACOS = sys::ERemoteStoragePlatform::k_ERemoteStoragePlatformOSX.0 as _;
+        const PS3 = sys::ERemoteStoragePlatform::k_ERemoteStoragePlatformPS3.0 as _;
+        const LINUX = sys::ERemoteStoragePlatform::k_ERemoteStoragePlatformLinux.0 as _;
+        const SWITCH = sys::ERemoteStoragePlatform::k_ERemoteStoragePlatformSwitch.0 as _;
+        const ANDROID = sys::ERemoteStoragePlatform::k_ERemoteStoragePlatformAndroid.0 as _;
+        const IOS = sys::ERemoteStoragePlatform::k_ERemoteStoragePlatformIOS.0 as _;
+    }
+}
+
+impl From<RemoteStoragePlatforms> for sys::ERemoteStoragePlatform {
+    fn from(platforms: RemoteStoragePlatforms) -> Self {
+        sys::ERemoteStoragePlatform(platforms.bits() as _)
+    }
+}
+
 /// A handle for a possible steam cloud file
 pub struct SteamFile {
     pub(crate) rs: *mut sys::ISteamRemoteStorage,
@@ -144,9 +167,28 @@ impl SteamFile {
         unsafe { sys::SteamAPI_ISteamRemoteStorage_FilePersisted(self.rs, self.name.as_ptr()) }
     }
 
-    // Returns the timestamp of the file
+    /// Returns the timestamp of the file
     pub fn timestamp(&self) -> i64 {
         unsafe { sys::SteamAPI_ISteamRemoteStorage_GetFileTimestamp(self.rs, self.name.as_ptr()) }
+    }
+
+    /// Set which platforms the file should be available on
+    pub fn set_sync_platforms(&self, platforms: RemoteStoragePlatforms) {
+        unsafe {
+            sys::SteamAPI_ISteamRemoteStorage_SetSyncPlatforms(
+                self.rs,
+                self.name.as_ptr(),
+                platforms.into(),
+            );
+        }
+    }
+
+    /// Returns the platforms the file is available on
+    pub fn get_sync_platforms(&self) -> RemoteStoragePlatforms {
+        let bits = unsafe {
+            sys::SteamAPI_ISteamRemoteStorage_GetSyncPlatforms(self.rs, self.name.as_ptr())
+        };
+        RemoteStoragePlatforms::from_bits_truncate(bits.0 as _)
     }
 
     pub fn write(self) -> SteamFileWriter {
@@ -167,7 +209,31 @@ impl SteamFile {
             }
         }
     }
+
+    pub fn share(&self, cb: impl FnOnce(Result<u64, SteamError>) + 'static + Send) {
+        let api_call =
+            unsafe { sys::SteamAPI_ISteamRemoteStorage_FileShare(self.rs, self.name.as_ptr()) };
+        unsafe {
+            register_call_result::<sys::RemoteStorageFileShareResult_t, _>(
+                &self._inner,
+                api_call,
+                move |v, io_error| {
+                    if io_error {
+                        cb(Err(SteamError::IOFailure));
+                        return;
+                    }
+                    if v.m_eResult != sys::EResult::k_EResultOK {
+                        cb(Err(v.m_eResult.into()));
+                        return;
+                    }
+
+                    cb(Ok(v.m_hFile))
+                },
+            )
+        }
+    }
 }
+
 /// A write handle for a steam cloud file
 pub struct SteamFileWriter {
     file: SteamFile,
@@ -180,7 +246,7 @@ impl std::io::Write for SteamFileWriter {
             if sys::SteamAPI_ISteamRemoteStorage_FileWriteStreamWriteChunk(
                 self.file.rs,
                 self.handle,
-                buf.as_ptr() as *const _,
+                buf.as_ptr().cast(),
                 buf.len() as _,
             ) {
                 Ok(buf.len())
@@ -253,7 +319,7 @@ impl std::io::Read for SteamFileReader {
             sys::SteamAPI_ISteamRemoteStorage_FileReadAsyncComplete(
                 self.file.rs,
                 callback.m_hFileReadAsync,
-                buf.as_mut_ptr() as *mut _,
+                buf.as_mut_ptr().cast(),
                 callback.m_cubRead,
             );
 

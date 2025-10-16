@@ -96,7 +96,7 @@ impl NetworkingMessages {
             sys::SteamAPI_ISteamNetworkingMessages_SendMessageToUser(
                 self.net,
                 user.as_ptr(),
-                data.as_ptr() as *const c_void,
+                data.as_ptr().cast(),
                 data.len() as u32,
                 send_type.bits(),
                 channel as i32,
@@ -300,30 +300,20 @@ pub struct NetworkingMessagesSessionRequest {
     remote: NetworkingIdentity,
 }
 
-unsafe impl Callback for NetworkingMessagesSessionRequest {
-    const ID: i32 = sys::SteamNetworkingMessagesSessionRequest_t_k_iCallback as _;
-
-    unsafe fn from_raw(raw: *mut c_void) -> Self {
-        let remote = *(raw as *mut sys::SteamNetworkingMessagesSessionRequest_t);
-        let remote = remote.m_identityRemote.into();
-        Self { remote }
-    }
-}
+impl_callback!(cb: SteamNetworkingMessagesSessionRequest_t => NetworkingMessagesSessionRequest {
+    let remote = cb.m_identityRemote.into();
+    Self { remote }
+});
 
 #[derive(Debug)]
 pub struct NetworkingMessagesSessionFailed {
     pub info: NetConnectionInfo,
 }
 
-unsafe impl Callback for NetworkingMessagesSessionFailed {
-    const ID: i32 = sys::SteamNetworkingMessagesSessionFailed_t_k_iCallback as _;
-
-    unsafe fn from_raw(raw: *mut c_void) -> Self {
-        let remote = *(raw as *mut sys::SteamNetworkingMessagesSessionFailed_t);
-        let remote = remote.m_info.into();
-        Self { info: remote }
-    }
-}
+impl_callback!(cb: SteamNetworkingMessagesSessionFailed_t => NetworkingMessagesSessionFailed {
+    let remote = cb.m_info.into();
+    Self { info: remote }
+});
 
 /// A request for a new connection.
 ///

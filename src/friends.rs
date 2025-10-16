@@ -1,8 +1,6 @@
 use super::*;
 use std::net::Ipv4Addr;
 
-const CALLBACK_BASE_ID: i32 = 300;
-
 bitflags! {
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
     #[repr(C)]
@@ -125,10 +123,7 @@ impl Friends {
     pub fn activate_game_overlay(&self, dialog: &str) {
         let dialog = CString::new(dialog).unwrap();
         unsafe {
-            sys::SteamAPI_ISteamFriends_ActivateGameOverlay(
-                self.friends,
-                dialog.as_ptr() as *const _,
-            );
+            sys::SteamAPI_ISteamFriends_ActivateGameOverlay(self.friends, dialog.as_ptr());
         }
     }
 
@@ -138,7 +133,7 @@ impl Friends {
             let url = CString::new(url).unwrap();
             sys::SteamAPI_ISteamFriends_ActivateGameOverlayToWebPage(
                 self.friends,
-                url.as_ptr() as *const _,
+                url.as_ptr(),
                 sys::EActivateGameOverlayToWebPageMode::k_EActivateGameOverlayToWebPageMode_Default,
             );
         }
@@ -172,7 +167,7 @@ impl Friends {
         unsafe {
             sys::SteamAPI_ISteamFriends_ActivateGameOverlayToUser(
                 self.friends,
-                dialog.as_ptr() as *const _,
+                dialog.as_ptr(),
                 user.0,
             );
         }
@@ -185,18 +180,36 @@ impl Friends {
         }
     }
 
-    /// Set rich presence for the user. Unsets the rich presence if `value` is None or empty.
-    /// See [Steam API](https://partner.steamgames.com/doc/api/ISteamFriends#SetRichPresence)
-    pub fn set_rich_presence(&self, key: &str, value: Option<&str>) -> bool {
+    /// Opens up an invite dialog that will send Rich Presence connect string to friends
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `connect` str contains a null byte.
+    pub fn activate_invite_dialog_connect_string(&self, connect: &str) {
+        let connect = CString::new(connect).unwrap();
         unsafe {
-            // Unwraps are infallible because Rust strs cannot contain null bytes
-            let key = CString::new(key).unwrap();
-            let value = CString::new(value.unwrap_or_default()).unwrap();
-            sys::SteamAPI_ISteamFriends_SetRichPresence(
+            sys::SteamAPI_ISteamFriends_ActivateGameOverlayInviteDialogConnectString(
                 self.friends,
-                key.as_ptr() as *const _,
-                value.as_ptr() as *const _,
-            )
+                connect.as_ptr(),
+            );
+        }
+    }
+
+    /// Set rich presence for the user. Unsets the rich presence if `value` is None or empty.
+    ///
+    /// See [Steam API](https://partner.steamgames.com/doc/api/ISteamFriends#SetRichPresence)
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `key` or `value` str slices contain a null byte.
+    pub fn set_rich_presence(&self, key: &str, value: Option<&str>) -> bool {
+        let key = CString::new(key).unwrap();
+        let value = value.map(|v| CString::new(v).unwrap());
+        let value_ptr = value
+            .as_ref()
+            .map_or(std::ptr::null(), |value| value.as_ptr());
+        unsafe {
+            sys::SteamAPI_ISteamFriends_SetRichPresence(self.friends, key.as_ptr(), value_ptr)
         }
     }
 
@@ -232,17 +245,12 @@ pub struct PersonaStateChange {
     pub flags: PersonaChange,
 }
 
-unsafe impl Callback for PersonaStateChange {
-    const ID: i32 = CALLBACK_BASE_ID + 4;
-
-    unsafe fn from_raw(raw: *mut c_void) -> Self {
-        let val = &mut *(raw as *mut sys::PersonaStateChange_t);
-        PersonaStateChange {
-            steam_id: SteamId(val.m_ulSteamID),
-            flags: PersonaChange::from_bits_truncate(val.m_nChangeFlags as i32),
-        }
+impl_callback!(cb: PersonaStateChange_t => PersonaStateChange {
+    Self {
+        steam_id: SteamId(cb.m_ulSteamID),
+        flags: PersonaChange::from_bits_truncate(cb.m_nChangeFlags as i32),
     }
-}
+});
 
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -250,16 +258,11 @@ pub struct GameOverlayActivated {
     pub active: bool,
 }
 
-unsafe impl Callback for GameOverlayActivated {
-    const ID: i32 = CALLBACK_BASE_ID + 31;
-
-    unsafe fn from_raw(raw: *mut c_void) -> Self {
-        let val = &mut *(raw as *mut sys::GameOverlayActivated_t);
-        Self {
-            active: val.m_bActive == 1,
-        }
+impl_callback!(cb: GameOverlayActivated_t => GameOverlayActivated {
+    Self {
+        active: cb.m_bActive == 1,
     }
-}
+});
 
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -268,17 +271,12 @@ pub struct GameLobbyJoinRequested {
     pub friend_steam_id: SteamId,
 }
 
-unsafe impl Callback for GameLobbyJoinRequested {
-    const ID: i32 = CALLBACK_BASE_ID + 33;
-
-    unsafe fn from_raw(raw: *mut c_void) -> Self {
-        let val = &mut *(raw as *mut sys::GameLobbyJoinRequested_t);
-        GameLobbyJoinRequested {
-            lobby_steam_id: LobbyId(val.m_steamIDLobby.m_steamid.m_unAll64Bits),
-            friend_steam_id: SteamId(val.m_steamIDFriend.m_steamid.m_unAll64Bits),
-        }
+impl_callback!(cb: GameLobbyJoinRequested_t => GameLobbyJoinRequested {
+    Self {
+        lobby_steam_id: LobbyId(cb.m_steamIDLobby.m_steamid.m_unAll64Bits),
+        friend_steam_id: SteamId(cb.m_steamIDFriend.m_steamid.m_unAll64Bits),
     }
-}
+});
 
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -291,29 +289,24 @@ pub struct GameRichPresenceJoinRequested {
     pub connect: String,
 }
 
-unsafe impl Callback for GameRichPresenceJoinRequested {
-    const ID: i32 = sys::GameRichPresenceJoinRequested_t_k_iCallback as i32;
+impl_callback!(cb: GameRichPresenceJoinRequested_t => GameRichPresenceJoinRequested {
+    // Convert from &[i8] to &[u8] because c_char in C is signed.
+    // Technically, this C string does not have to be UTF-8, but I think for all realistic uses it will be.
+    let as_bytes = cb.m_rgchConnect.map(|c| c as u8);
+    let connect = CStr::from_bytes_until_nul(&as_bytes)
+        .expect("Connect string payload was not a valid C string");
+    let connect = connect
+        .to_str()
+        .expect("Connect string payload was not valid UTF-8")
+        .to_string();
 
-    unsafe fn from_raw(raw: *mut c_void) -> Self {
-        let val = &mut *(raw as *mut sys::GameRichPresenceJoinRequested_t);
-        // Convert from &[i8] to &[u8] because c_char in C is signed.
-        // Technically, this C string does not have to be UTF-8, but I think for all realistic uses it will be.
-        let as_bytes = val.m_rgchConnect.map(|c| c as u8);
-        let connect = CStr::from_bytes_until_nul(&as_bytes)
-            .expect("Connect string payload was not a valid C string");
-        let connect = connect
-            .to_str()
-            .expect("Connect string payload was not valid UTF-8")
-            .to_string();
+    let friend_steam_id = SteamId::from_raw(cb.m_steamIDFriend.m_steamid.m_unAll64Bits);
 
-        let friend_steam_id = SteamId::from_raw(val.m_steamIDFriend.m_steamid.m_unAll64Bits);
-
-        GameRichPresenceJoinRequested {
-            friend_steam_id,
-            connect,
-        }
+    GameRichPresenceJoinRequested {
+        friend_steam_id,
+        connect,
     }
-}
+});
 
 pub struct Friend {
     id: SteamId,
@@ -362,6 +355,7 @@ impl Friend {
             match state {
                 sys::EPersonaState::k_EPersonaStateOffline => FriendState::Offline,
                 sys::EPersonaState::k_EPersonaStateOnline => FriendState::Online,
+                sys::EPersonaState::k_EPersonaStateInvisible => FriendState::Invisible,
                 sys::EPersonaState::k_EPersonaStateBusy => FriendState::Busy,
                 sys::EPersonaState::k_EPersonaStateAway => FriendState::Away,
                 sys::EPersonaState::k_EPersonaStateSnooze => FriendState::Snooze,
@@ -480,7 +474,7 @@ impl Friend {
             sys::SteamAPI_ISteamFriends_InviteUserToGame(
                 self.friends,
                 self.id.0,
-                connect_string.as_ptr() as *const _,
+                connect_string.as_ptr(),
             );
         }
     }
@@ -498,6 +492,7 @@ impl Friend {
 pub enum FriendState {
     Offline,
     Online,
+    Invisible,
     Busy,
     Away,
     Snooze,

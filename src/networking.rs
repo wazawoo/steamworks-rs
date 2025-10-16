@@ -35,17 +35,13 @@ impl Networking {
     /// Accepts incoming packets from the given user
     ///
     /// Should only be called in response to a `P2PSessionRequest`.
-    pub fn accept_p2p_session(&self, user: SteamId) {
-        unsafe {
-            sys::SteamAPI_ISteamNetworking_AcceptP2PSessionWithUser(self.net, user.0);
-        }
+    pub fn accept_p2p_session(&self, user: SteamId) -> bool {
+        unsafe { sys::SteamAPI_ISteamNetworking_AcceptP2PSessionWithUser(self.net, user.0) }
     }
 
     /// Closes the p2p connection between the given user
-    pub fn close_p2p_session(&self, user: SteamId) {
-        unsafe {
-            sys::SteamAPI_ISteamNetworking_CloseP2PSessionWithUser(self.net, user.0);
-        }
+    pub fn close_p2p_session(&self, user: SteamId) -> bool {
+        unsafe { sys::SteamAPI_ISteamNetworking_CloseP2PSessionWithUser(self.net, user.0) }
     }
 
     /// Sends a packet to the user, starting the
@@ -72,7 +68,7 @@ impl Networking {
             sys::SteamAPI_ISteamNetworking_SendP2PPacket(
                 self.net,
                 remote.0,
-                data.as_ptr() as *const _,
+                data.as_ptr().cast(),
                 data.len() as u32,
                 send_type,
                 channel,
@@ -120,7 +116,7 @@ impl Networking {
             let mut remote = 0;
             if sys::SteamAPI_ISteamNetworking_ReadP2PPacket(
                 self.net,
-                buf.as_mut_ptr() as *mut _,
+                buf.as_mut_ptr().cast(),
                 buf.len() as _,
                 &mut size,
                 &mut remote as *mut _ as *mut _,
@@ -143,16 +139,11 @@ pub struct P2PSessionRequest {
     pub remote: SteamId,
 }
 
-unsafe impl Callback for P2PSessionRequest {
-    const ID: i32 = 1202;
-
-    unsafe fn from_raw(raw: *mut c_void) -> Self {
-        let val = &mut *(raw as *mut sys::P2PSessionRequest_t);
-        P2PSessionRequest {
-            remote: SteamId(val.m_steamIDRemote.m_steamid.m_unAll64Bits),
-        }
+impl_callback!(cb: P2PSessionRequest_t => P2PSessionRequest {
+    Self {
+        remote: SteamId(cb.m_steamIDRemote.m_steamid.m_unAll64Bits),
     }
-}
+});
 
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -161,14 +152,9 @@ pub struct P2PSessionConnectFail {
     pub error: u8,
 }
 
-unsafe impl Callback for P2PSessionConnectFail {
-    const ID: i32 = 1203;
-
-    unsafe fn from_raw(raw: *mut c_void) -> Self {
-        let val = &mut *(raw as *mut sys::P2PSessionConnectFail_t);
-        P2PSessionConnectFail {
-            remote: SteamId(val.m_steamIDRemote.m_steamid.m_unAll64Bits),
-            error: val.m_eP2PSessionError,
-        }
+impl_callback!(cb: P2PSessionConnectFail_t => P2PSessionConnectFail {
+    Self {
+        remote: SteamId(cb.m_steamIDRemote.m_steamid.m_unAll64Bits),
+        error: cb.m_eP2PSessionError,
     }
-}
+});

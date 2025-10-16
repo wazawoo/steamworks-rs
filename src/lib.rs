@@ -39,8 +39,9 @@ pub use crate::user::*;
 pub use crate::user_stats::*;
 pub use crate::utils::*;
 
-mod app;
+#[macro_use]
 mod callback;
+mod app;
 mod error;
 mod friends;
 mod input;
@@ -66,6 +67,14 @@ pub type SResult<T> = Result<T, SteamError>;
 
 pub type SIResult<T> = Result<T, SteamAPIInitError>;
 
+pub(crate) fn to_steam_result(result: sys::EResult) -> SResult<()> {
+    if result == sys::EResult::k_EResultOK {
+        Ok(())
+    } else {
+        Err(result.into())
+    }
+}
+
 // A note about thread-safety:
 // The steam api is assumed to be thread safe unless
 // the documentation for a method states otherwise,
@@ -89,14 +98,95 @@ impl Clone for Client {
 }
 
 struct Inner {
-    manager: Box<dyn Manager>,
-    callbacks: Mutex<Callbacks>,
+    manager: Manager,
+    callbacks: Callbacks,
     networking_sockets_data: Mutex<NetworkingSocketsData>,
 }
 
 struct Callbacks {
-    callbacks: HashMap<i32, Box<dyn FnMut(*mut c_void) + Send + 'static>>,
-    call_results: HashMap<sys::SteamAPICall_t, Box<dyn FnOnce(*mut c_void, bool) + Send + 'static>>,
+    callbacks: Mutex<HashMap<i32, Box<dyn FnMut(*mut c_void) + Send + 'static>>>,
+    call_results:
+        Mutex<HashMap<sys::SteamAPICall_t, Box<dyn FnOnce(*mut c_void, bool) + Send + 'static>>>,
+}
+
+impl Inner {
+    /// Runs any currently pending callbacks
+    ///
+    /// This runs all currently pending callbacks on the current
+    /// thread.
+    ///
+    /// This should be called frequently (e.g. once per a frame)
+    /// in order to reduce the latency between recieving events.
+    pub fn run_callbacks(&self) {
+        self.run_callbacks_raw(|cb_discrim, data| {
+            let mut callbacks = self.callbacks.callbacks.lock().unwrap();
+            if let Some(cb) = callbacks.get_mut(&cb_discrim) {
+                cb(data);
+            }
+        });
+    }
+
+    /// Runs any currently pending callbacks.
+    ///
+    /// This is identical to `run_callbacks` in every way, except that
+    /// `callback_handler` is called for every callback invoked.
+    ///
+    /// This option provides an alternative for handling callbacks that
+    /// can doesn't require the handler to be `Send`, and `'static`.
+    ///
+    /// This should be called frequently (e.g. once per a frame)
+    /// in order to reduce the latency between recieving events.
+    pub fn process_callbacks(&self, mut callback_handler: impl FnMut(CallbackResult)) {
+        self.run_callbacks_raw(|cb_discrim, data| {
+            {
+                let mut callbacks = self.callbacks.callbacks.lock().unwrap();
+                if let Some(cb) = callbacks.get_mut(&cb_discrim) {
+                    cb(data);
+                }
+            }
+            let cb_result = unsafe { CallbackResult::from_raw(cb_discrim, data) };
+            if let Some(cb_result) = cb_result {
+                callback_handler(cb_result);
+            }
+        });
+    }
+
+    fn run_callbacks_raw(&self, mut callback_handler: impl FnMut(i32, *mut c_void)) {
+        unsafe {
+            let pipe = self.manager.get_pipe();
+            sys::SteamAPI_ManualDispatch_RunFrame(pipe);
+            let mut callback = std::mem::zeroed();
+            let mut apicall_result = Vec::new();
+            while sys::SteamAPI_ManualDispatch_GetNextCallback(pipe, &mut callback) {
+                if callback.m_iCallback == sys::SteamAPICallCompleted_t_k_iCallback as i32 {
+                    let apicall = callback
+                        .m_pubParam
+                        .cast::<sys::SteamAPICallCompleted_t>()
+                        .read_unaligned();
+                    apicall_result.resize(apicall.m_cubParam as usize, 0u8);
+                    let mut failed = false;
+                    if sys::SteamAPI_ManualDispatch_GetAPICallResult(
+                        pipe,
+                        apicall.m_hAsyncCall,
+                        apicall_result.as_mut_ptr().cast(),
+                        apicall.m_cubParam as _,
+                        apicall.m_iCallback,
+                        &mut failed,
+                    ) {
+                        let mut call_results = self.callbacks.call_results.lock().unwrap();
+                        // The &{val} pattern here is to avoid taking a reference to a packed field
+                        // Since the value here is Copy, we can just copy it and borrow the copy
+                        if let Some(cb) = call_results.remove(&{ apicall.m_hAsyncCall }) {
+                            cb(apicall_result.as_mut_ptr().cast(), failed);
+                        }
+                    }
+                } else {
+                    callback_handler(callback.m_iCallback, callback.m_pubParam.cast());
+                }
+                sys::SteamAPI_ManualDispatch_FreeLastCallback(pipe);
+            }
+        }
+    }
 }
 
 struct NetworkingSocketsData {
@@ -168,11 +258,11 @@ impl Client {
 
             sys::SteamAPI_ManualDispatch_Init();
             let client = Arc::new(Inner {
-                manager: Box::new(ClientManager),
-                callbacks: Mutex::new(Callbacks {
-                    callbacks: HashMap::new(),
-                    call_results: HashMap::new(),
-                }),
+                manager: Manager::Client,
+                callbacks: Callbacks {
+                    callbacks: Mutex::new(HashMap::new()),
+                    call_results: Mutex::new(HashMap::new()),
+                },
                 networking_sockets_data: Mutex::new(NetworkingSocketsData {
                     sockets: Default::default(),
                     independent_connections: Default::default(),
@@ -213,11 +303,7 @@ impl Client {
     /// This should be called frequently (e.g. once per a frame)
     /// in order to reduce the latency between recieving events.
     pub fn run_callbacks(&self) {
-        self.run_callbacks_raw(|callbacks, cb_discrim, data| {
-            if let Some(cb) = callbacks.callbacks.get_mut(&cb_discrim) {
-                cb(data);
-            }
-        });
+        self.inner.run_callbacks()
     }
 
     /// Runs any currently pending callbacks.
@@ -231,56 +317,7 @@ impl Client {
     /// This should be called frequently (e.g. once per a frame)
     /// in order to reduce the latency between recieving events.
     pub fn process_callbacks(&self, mut callback_handler: impl FnMut(CallbackResult)) {
-        self.run_callbacks_raw(|callbacks, cb_discrim, data| {
-            if let Some(cb) = callbacks.callbacks.get_mut(&cb_discrim) {
-                cb(data);
-            }
-            let cb_result = unsafe { CallbackResult::from_raw(cb_discrim, data) };
-            if let Some(cb_result) = cb_result {
-                callback_handler(cb_result);
-            }
-        });
-    }
-
-    fn run_callbacks_raw(
-        &self,
-        mut callback_handler: impl FnMut(&mut Callbacks, i32, *mut c_void),
-    ) {
-        unsafe {
-            let pipe = self.inner.manager.get_pipe();
-            sys::SteamAPI_ManualDispatch_RunFrame(pipe);
-            let mut callback = std::mem::zeroed();
-            while sys::SteamAPI_ManualDispatch_GetNextCallback(pipe, &mut callback) {
-                let mut callbacks = self.inner.callbacks.lock().unwrap();
-                if callback.m_iCallback == sys::SteamAPICallCompleted_t_k_iCallback as i32 {
-                    let apicall =
-                        &mut *(callback.m_pubParam as *mut _ as *mut sys::SteamAPICallCompleted_t);
-                    let mut apicall_result = vec![0; apicall.m_cubParam as usize];
-                    let mut failed = false;
-                    if sys::SteamAPI_ManualDispatch_GetAPICallResult(
-                        pipe,
-                        apicall.m_hAsyncCall,
-                        apicall_result.as_mut_ptr() as *mut _,
-                        apicall.m_cubParam as _,
-                        apicall.m_iCallback,
-                        &mut failed,
-                    ) {
-                        // The &{val} pattern here is to avoid taking a reference to a packed field
-                        // Since the value here is Copy, we can just copy it and borrow the copy
-                        if let Some(cb) = callbacks.call_results.remove(&{ apicall.m_hAsyncCall }) {
-                            cb(apicall_result.as_mut_ptr() as *mut _, failed);
-                        }
-                    }
-                } else {
-                    callback_handler(
-                        &mut callbacks,
-                        callback.m_iCallback,
-                        callback.m_pubParam as *mut _,
-                    );
-                }
-                sys::SteamAPI_ManualDispatch_FreeLastCallback(pipe);
-            }
-        }
+        self.inner.process_callbacks(&mut callback_handler)
     }
 
     /// Registers the passed function as a callback for the
@@ -510,26 +547,29 @@ impl Client {
 }
 
 /// Used to separate client and game server modes
-trait Manager: Send + Sync {
-    fn get_pipe(&self) -> sys::HSteamPipe;
+enum Manager {
+    Client,
+    Server,
 }
 
-/// Manages keeping the steam api active for clients
-struct ClientManager;
-
-impl Manager for ClientManager {
+impl Manager {
+    /// Returns the pipe handle for the steam api
     fn get_pipe(&self) -> sys::HSteamPipe {
-        // SAFETY: This is considered unsafe only because of FFI, the function is otherwise
-        // always safe to call.
-        unsafe { sys::SteamAPI_GetHSteamPipe() }
+        match self {
+            Manager::Client => unsafe { sys::SteamAPI_GetHSteamPipe() },
+            Manager::Server => unsafe { sys::SteamGameServer_GetHSteamPipe() },
+        }
     }
 }
 
-impl Drop for ClientManager {
+impl Drop for Manager {
     fn drop(&mut self) {
         // SAFETY: This is considered unsafe only because of FFI, the function is otherwise
         // always safe to call from any thread.
-        unsafe { sys::SteamAPI_Shutdown() }
+        match self {
+            Manager::Client => unsafe { sys::SteamAPI_Shutdown() },
+            Manager::Server => unsafe { sys::SteamGameServer_Shutdown() },
+        }
     }
 }
 

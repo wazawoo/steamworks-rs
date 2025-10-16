@@ -15,9 +15,6 @@ pub struct UGC {
     pub(crate) inner: Arc<Inner>,
 }
 
-const CALLBACK_BASE_ID: i32 = 3400;
-const CALLBACK_REMOTE_STORAGE_BASE_ID: i32 = 1300;
-
 // TODO: should come from sys, but I don't think its generated.
 #[allow(non_upper_case_globals)]
 const UGCQueryHandleInvalid: u64 = 0xffffffffffffffff;
@@ -492,22 +489,16 @@ pub struct DownloadItemResult {
     pub error: Option<SteamError>,
 }
 
-unsafe impl Callback for DownloadItemResult {
-    const ID: i32 = CALLBACK_BASE_ID + 6;
-
-    unsafe fn from_raw(raw: *mut c_void) -> Self {
-        let val = &mut *(raw as *mut sys::DownloadItemResult_t);
-        DownloadItemResult {
-            app_id: AppId(val.m_unAppID),
-            published_file_id: PublishedFileId(val.m_nPublishedFileId),
-
-            error: match val.m_eResult {
-                sys::EResult::k_EResultOK => None,
-                error => Some(error.into()),
-            },
-        }
+impl_callback!(cb: DownloadItemResult_t => DownloadItemResult {
+    Self {
+        app_id: AppId(cb.m_unAppID),
+        published_file_id: PublishedFileId(cb.m_nPublishedFileId),
+        error: match cb.m_eResult {
+            sys::EResult::k_EResultOK => None,
+            error => Some(error.into()),
+        },
     }
-}
+});
 
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -535,17 +526,16 @@ impl UGC {
             register_call_result::<sys::CreateItemResult_t, _>(
                 &self.inner,
                 api_call,
-                CALLBACK_BASE_ID + 3,
                 move |v, io_error| {
                     cb(if io_error {
                         Err(SteamError::IOFailure)
-                    } else if v.m_eResult != sys::EResult::k_EResultOK {
-                        Err(v.m_eResult.into())
                     } else {
-                        Ok((
-                            PublishedFileId(v.m_nPublishedFileId),
-                            v.m_bUserNeedsToAcceptWorkshopLegalAgreement,
-                        ))
+                        crate::to_steam_result(v.m_eResult).map(|_| {
+                            (
+                                PublishedFileId(v.m_nPublishedFileId),
+                                v.m_bUserNeedsToAcceptWorkshopLegalAgreement,
+                            )
+                        })
                     })
                 },
             );
@@ -576,14 +566,11 @@ impl UGC {
             register_call_result::<sys::RemoteStorageSubscribePublishedFileResult_t, _>(
                 &self.inner,
                 api_call,
-                CALLBACK_REMOTE_STORAGE_BASE_ID + 13,
                 move |v, io_error| {
                     cb(if io_error {
                         Err(SteamError::IOFailure)
-                    } else if v.m_eResult != sys::EResult::k_EResultOK {
-                        Err(v.m_eResult.into())
                     } else {
-                        Ok(())
+                        crate::to_steam_result(v.m_eResult)
                     })
                 },
             );
@@ -599,14 +586,11 @@ impl UGC {
             register_call_result::<sys::RemoteStorageUnsubscribePublishedFileResult_t, _>(
                 &self.inner,
                 api_call,
-                CALLBACK_REMOTE_STORAGE_BASE_ID + 15,
                 move |v, io_error| {
                     cb(if io_error {
                         Err(SteamError::IOFailure)
-                    } else if v.m_eResult != sys::EResult::k_EResultOK {
-                        Err(v.m_eResult.into())
                     } else {
-                        Ok(())
+                        crate::to_steam_result(v.m_eResult)
                     })
                 },
             );
@@ -671,7 +655,7 @@ impl UGC {
                 &mut timestamp,
             ) {
                 Some(InstallInfo {
-                    folder: CStr::from_ptr(folder.as_ptr() as *const _)
+                    folder: CStr::from_ptr(folder.as_ptr())
                         .to_string_lossy()
                         .into_owned(),
                     size_on_disk,
@@ -811,7 +795,6 @@ impl UGC {
             register_call_result::<sys::DownloadItemResult_t, _>(
                 &self.inner,
                 api_call,
-                CALLBACK_REMOTE_STORAGE_BASE_ID + 17,
                 move |v, io_error| {
                     cb(if io_error {
                         Err(SteamError::IOFailure)
@@ -1018,7 +1001,6 @@ impl UpdateHandle {
             register_call_result::<sys::SubmitItemUpdateResult_t, _>(
                 &self.inner,
                 api_call,
-                CALLBACK_BASE_ID + 4,
                 move |v, io_error| {
                     cb(if io_error {
                         Err(SteamError::IOFailure)
@@ -1440,7 +1422,6 @@ impl QueryHandle {
             register_call_result::<sys::SteamUGCQueryCompleted_t, _>(
                 &inner,
                 api_call,
-                CALLBACK_BASE_ID + 1,
                 move |v, io_error| {
                     let ugc = sys::SteamAPI_SteamUGC_v021();
                     if io_error {
@@ -1548,11 +1529,7 @@ impl<'a> QueryResults<'a> {
         };
 
         if ok {
-            Some(unsafe {
-                CStr::from_ptr(url.as_ptr() as *const _)
-                    .to_string_lossy()
-                    .into_owned()
-            })
+            Some(unsafe { CStr::from_ptr(url.as_ptr()).to_string_lossy().into_owned() })
         } else {
             None
         }
@@ -1730,10 +1707,8 @@ impl<'a> QueryResults<'a> {
         if ok {
             Some(unsafe {
                 (
-                    CStr::from_ptr(key.as_ptr() as *const _)
-                        .to_string_lossy()
-                        .into_owned(),
-                    CStr::from_ptr(value.as_ptr() as *const _)
+                    CStr::from_ptr(key.as_ptr()).to_string_lossy().into_owned(),
+                    CStr::from_ptr(value.as_ptr())
                         .to_string_lossy()
                         .into_owned(),
                 )
@@ -1760,7 +1735,7 @@ impl<'a> QueryResults<'a> {
         };
 
         if ok {
-            let metadata = unsafe { CStr::from_ptr(metadata.as_ptr() as *const _).to_bytes() };
+            let metadata = unsafe { CStr::from_ptr(metadata.as_ptr()).to_bytes() };
             if metadata.is_empty() {
                 None
             } else {
