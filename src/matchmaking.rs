@@ -238,6 +238,13 @@ impl Matchmaking {
         .ok()
     }
 
+    /// Invites a user to the passed lobby
+    pub fn invite_to_lobby(&self, lobby: LobbyId, invitee: SteamId) {
+        unsafe {
+            sys::SteamAPI_ISteamMatchmaking_InviteUserToLobby(self.mm, lobby.0, invitee.0);
+        }
+    }
+
     /// Exits the passed lobby
     pub fn leave_lobby(&self, lobby: LobbyId) {
         unsafe {
