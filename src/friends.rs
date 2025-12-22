@@ -479,6 +479,19 @@ impl Friend {
         }
     }
 
+    pub fn get_rich_presence(&self, key: &str) -> String {
+        unsafe {
+            let key = CString::new(key).unwrap();
+            let val = sys::SteamAPI_ISteamFriends_GetFriendRichPresence(
+                self.friends,
+                self.id.0, 
+                key.as_ptr()
+            );
+            let val = CStr::from_ptr(val);
+            val.to_string_lossy().into_owned()
+        }
+    }
+
     /// Mark a target user as 'played with'.
     /// NOTE: The current user must be in game with the other player for the association to work.
     pub fn set_played_with(&self) {
