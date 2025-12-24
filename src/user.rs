@@ -25,6 +25,20 @@ impl User {
         unsafe { sys::SteamAPI_ISteamUser_BLoggedOn(self.user) }
     }
 
+    pub fn advertise_game_p2p(
+        &self,
+        server_steam_id: SteamId
+    ) {
+        unsafe {
+            sys::SteamAPI_ISteamUser_AdvertiseGame(
+                self.user, 
+                server_steam_id.0, 
+                0, 
+                0
+            );
+        }
+    }
+
     /// Retrieve an authentication session ticket that can be sent
     /// to an entity that wishes to verify you.
     ///
